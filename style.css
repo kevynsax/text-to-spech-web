@@ -158,6 +158,75 @@ select option {
   font-size: 13.5px;
 }
 
+/* ── Upload area ──────────────────────────────────────────────── */
+.upload-area {
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 22px;
+  background: var(--raised);
+  border: 1px dashed var(--border-hi);
+  border-radius: var(--radius-sm);
+  color: var(--text-sub);
+  text-align: center;
+  transition: border-color 0.18s, background 0.18s, box-shadow 0.18s;
+}
+
+.upload-area.is-dragging {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.upload-area.is-busy {
+  border-style: solid;
+}
+
+.upload-icon {
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+
+.upload-main {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.upload-browse {
+  color: var(--accent);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.upload-browse:hover {
+  color: var(--accent-h);
+  text-decoration: underline;
+}
+
+.upload-sub {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+#upload-busy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 /* ── Speed slider ─────────────────────────────────────────────── */
 .badge {
   background: var(--raised);

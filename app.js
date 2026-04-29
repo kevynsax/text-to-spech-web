@@ -1,4 +1,33 @@
 const API = 'https://tts.kevyn.com.br';
+const QWENVL_API = 'https://qwenvl.kevyn.com.br';
+const QWENVL_MODEL = 'Qwen/Qwen2.5-VL-7B-Instruct-AWQ';
+const PDF_RENDER_MAX_SIDE = 1200;
+const PDF_RENDER_MAX_SCALE = 1.5;
+const PDF_IMAGE_QUALITY = 0.78;
+const QWENVL_MAX_TOKENS = 2048;
+const EXTRACTOR_SYSTEM_PROMPT = [
+  'You are a document OCR and transcription engine.',
+  'Return one valid JSON object and nothing else.',
+  'The JSON object must have this exact shape: {"language":"pt","content":"..."}',
+  'Use language as a lowercase ISO 639-1 code such as "pt", "en", "es", or "unknown".',
+  'Escape quotes and line breaks inside content so the response remains valid JSON.',
+  'Never add explanations, summaries, references, citations, commentary, confidence notes, markdown fences, or greetings.',
+].join(' ');
+const FILE_CONTENT_PROMPT = [
+  'Extract the document text for text-to-speech.',
+  'Detect the primary language of the main content.',
+  'Put only the main readable body content in the JSON content field, in the same language as the file.',
+  'Preserve the original reading order: title, headings, paragraphs, lists, and quoted text.',
+  'Ignore page numbers, running headers, running footers, footnotes, references, copyright notices, scanner marks, watermarks, and decorative text.',
+  'Do not describe the page, image quality, layout, fonts, margins, or visual elements.',
+  'Do not summarize, correct, modernize, translate, or add any text that is not part of the main content.',
+  'If a page has multiple columns, read each column from top to bottom, left to right.',
+  'If a word is unclear, transcribe your best reading without adding notes.',
+].join(' ');
+const FILE_PAGE_PROMPT = [
+  FILE_CONTENT_PROMPT,
+  'Extract only this page. Do not mention the page number.',
+].join(' ');
 
 // Only en and pt have voices in Kokoro; es is UI-only
 const VOICE_LANGS = [
@@ -17,6 +46,13 @@ const T = {
     generatingBtn:'Generating…',
     download:     'Download',
     outputLabel:  'Generated Audio',
+    uploadDrop:   'Drop a PDF or image, or',
+    uploadBrowse: 'browse',
+    uploadFormats:'PDF · PNG · JPG · WebP',
+    uploadReading:'Reading file…',
+    uploadDone:   'Content loaded into the text box.',
+    errFileType:  'Please upload a PDF or image file.',
+    errFileRead:  'Failed to read the uploaded file:',
     chars:        'chars',
     errEmpty:     'Please enter some text to synthesize.',
     errVoice:     'Please select a voice.',
@@ -35,6 +71,13 @@ const T = {
     generatingBtn:'Gerando…',
     download:     'Baixar',
     outputLabel:  'Áudio Gerado',
+    uploadDrop:   'Solte um PDF ou imagem, ou',
+    uploadBrowse: 'procurar',
+    uploadFormats:'PDF · PNG · JPG · WebP',
+    uploadReading:'Lendo arquivo…',
+    uploadDone:   'Conteúdo carregado na caixa de texto.',
+    errFileType:  'Envie um arquivo PDF ou imagem.',
+    errFileRead:  'Falha ao ler o arquivo enviado:',
     chars:        'chars',
     errEmpty:     'Por favor, insira um texto para sintetizar.',
     errVoice:     'Por favor, selecione uma voz.',
@@ -53,6 +96,13 @@ const T = {
     generatingBtn:'Generando…',
     download:     'Descargar',
     outputLabel:  'Audio Generado',
+    uploadDrop:   'Suelta un PDF o imagen, o',
+    uploadBrowse: 'buscar',
+    uploadFormats:'PDF · PNG · JPG · WebP',
+    uploadReading:'Leyendo archivo…',
+    uploadDone:   'Contenido cargado en el cuadro de texto.',
+    errFileType:  'Sube un archivo PDF o imagen.',
+    errFileRead:  'Error al leer el archivo subido:',
     chars:        'chars',
     errEmpty:     'Por favor, ingresa un texto para sintetizar.',
     errVoice:     'Por favor, selecciona una voz.',
@@ -128,6 +178,304 @@ function showError(msg) {
   document.getElementById('error-message').textContent = msg;
   toast.hidden = false;
   setTimeout(() => { toast.hidden = true; }, 6000);
+}
+
+function setUploadBusy(isBusy, message = '') {
+  const uploadArea = document.getElementById('upload-area');
+  const uploadIdle = document.getElementById('upload-idle');
+  const uploadBusy = document.getElementById('upload-busy');
+  const uploadStatus = document.getElementById('upload-status');
+
+  uploadArea.classList.toggle('is-busy', isBusy);
+  uploadIdle.hidden = isBusy;
+  uploadBusy.hidden = !isBusy;
+  uploadStatus.textContent = message;
+}
+
+function updateCharCount() {
+  const textEl = document.getElementById('text');
+  document.getElementById('char-count').textContent = textEl.value.length;
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error('FileReader failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function canvasToJpegDataUrl(canvas) {
+  return canvas.toDataURL('image/jpeg', PDF_IMAGE_QUALITY);
+}
+
+async function renderPdfPageToDataUrl(pdf, pageNumber) {
+  const page = await pdf.getPage(pageNumber);
+  const baseViewport = page.getViewport({ scale: 1 });
+  const scale = Math.min(
+    PDF_RENDER_MAX_SCALE,
+    PDF_RENDER_MAX_SIDE / Math.max(baseViewport.width, baseViewport.height)
+  );
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+
+  canvas.width = Math.ceil(viewport.width);
+  canvas.height = Math.ceil(viewport.height);
+
+  await page.render({ canvasContext: context, viewport }).promise;
+
+  const dataUrl = canvasToJpegDataUrl(canvas);
+  canvas.width = 0;
+  canvas.height = 0;
+  return dataUrl;
+}
+
+async function renderPdfToImageUrls(file) {
+  if (!window.pdfjsLib) {
+    throw new Error('PDF.js is not available.');
+  }
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  const data = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data }).promise;
+  const imageUrls = [];
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    imageUrls.push(await renderPdfPageToDataUrl(pdf, pageNumber));
+  }
+
+  return imageUrls;
+}
+
+async function getImageQwenContent(file) {
+  const dataUrl = await fileToDataUrl(file);
+  return [
+    { type: 'text', text: FILE_CONTENT_PROMPT },
+    { type: 'image_url', image_url: { url: dataUrl } },
+  ];
+}
+
+function getPageQwenContent(pageImageUrl) {
+  return [
+    { type: 'text', text: FILE_PAGE_PROMPT },
+    { type: 'image_url', image_url: { url: pageImageUrl } },
+  ];
+}
+
+function extractMessageText(data) {
+  const content = data?.choices?.[0]?.message?.content ?? data?.message?.content ?? data?.content ?? data?.text;
+
+  if (typeof content === 'string') return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .map(part => {
+        if (typeof part === 'string') return part;
+        return part?.text ?? part?.content ?? '';
+      })
+      .join('\n')
+      .trim();
+  }
+
+  return '';
+}
+
+function stripMarkdownFence(text) {
+  return text
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+}
+
+function extractLooseJsonResult(text) {
+  const language = text.match(/"language"\s*:\s*"([^"]+)"/)?.[1]?.toLowerCase() || 'unknown';
+  const contentMatch = text.match(/"content"\s*:\s*"/);
+  if (!contentMatch) return null;
+
+  const contentStart = contentMatch.index + contentMatch[0].length;
+  const objectEnd = text.lastIndexOf('}');
+  const contentEnd = objectEnd >= 0 ? text.lastIndexOf('"', objectEnd) : text.lastIndexOf('"');
+
+  if (contentEnd <= contentStart) return null;
+
+  let content = text.slice(contentStart, contentEnd).trim();
+
+  try {
+    content = JSON.parse(`"${content}"`);
+  } catch {
+    content = content
+      .replace(/\\"/g, '"')
+      .replace(/\\n/g, '\n')
+      .replace(/\\r/g, '\r')
+      .replace(/\\t/g, '\t')
+      .replace(/\\\\/g, '\\');
+  }
+
+  return {
+    language,
+    content: content.trim(),
+  };
+}
+
+function parseExtractorResult(rawText) {
+  const text = stripMarkdownFence(rawText.trim());
+  const languageMatch = text.match(/^LANGUAGE:\s*([a-z]{2}|unknown)\s*\n+([\s\S]*)$/i);
+
+  if (languageMatch) {
+    return {
+      language: languageMatch[1].toLowerCase(),
+      content: languageMatch[2].replace(/^CONTENT:\s*/i, '').trim(),
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === 'object') {
+      return {
+        language: typeof parsed.language === 'string' ? parsed.language.toLowerCase() : 'unknown',
+        content: typeof parsed.content === 'string' ? parsed.content.trim() : '',
+      };
+    }
+  } catch {
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[0]);
+        return {
+          language: typeof parsed.language === 'string' ? parsed.language.toLowerCase() : 'unknown',
+          content: typeof parsed.content === 'string' ? parsed.content.trim() : '',
+        };
+      } catch {
+        // Fall through to plain text handling below.
+      }
+    }
+  }
+
+  const looseResult = extractLooseJsonResult(text);
+  if (looseResult) return looseResult;
+
+  return { language: 'unknown', content: text };
+}
+
+function selectDetectedLanguage(language) {
+  const langCode = (language || '').toLowerCase().split('-')[0];
+  const langSel = document.getElementById('language');
+  const supported = VOICE_LANGS.some(lang => lang.id === langCode);
+
+  if (!supported || langSel.value === langCode) return;
+
+  langSel.value = langCode;
+  populateVoices(langCode);
+}
+
+async function requestQwenExtraction(content) {
+  const res = await fetch(`${QWENVL_API}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: QWENVL_MODEL,
+      temperature: 0,
+      max_tokens: QWENVL_MAX_TOKENS,
+      messages: [
+        {
+          role: 'system',
+          content: EXTRACTOR_SYSTEM_PROMPT,
+        },
+        {
+          role: 'user',
+          content,
+        },
+      ],
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(errText || `Server returned ${res.status}`);
+  }
+
+  const data = await res.json();
+  const result = parseExtractorResult(extractMessageText(data));
+  if (!result.content) throw new Error('No text returned by Qwen-VL.');
+  return result;
+}
+
+function getMostCommonLanguage(languages) {
+  const counts = languages.reduce((acc, language) => {
+    const code = (language || 'unknown').toLowerCase().split('-')[0];
+    if (code && code !== 'unknown') acc[code] = (acc[code] || 0) + 1;
+    return acc;
+  }, {});
+
+  return Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'unknown';
+}
+
+function unwrapPageContent(content) {
+  return content
+    .replace(/\r\n/g, '\n')
+    .split(/\n{2,}/)
+    .map(paragraph => paragraph
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim())
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+async function extractPdfContent(file) {
+  const pageImageUrls = await renderPdfToImageUrls(file);
+  const pageContents = [];
+  const languages = [];
+
+  for (let index = 0; index < pageImageUrls.length; index += 1) {
+    setUploadBusy(true, `${t.uploadReading} ${index + 1}/${pageImageUrls.length}`);
+    const result = await requestQwenExtraction(getPageQwenContent(pageImageUrls[index]));
+    if (result.content) pageContents.push(unwrapPageContent(result.content));
+    languages.push(result.language);
+  }
+
+  return {
+    language: getMostCommonLanguage(languages),
+    content: pageContents.join('\n\n'),
+  };
+}
+
+async function extractFileContent(file) {
+  if (!file || !(file.type === 'application/pdf' || file.type.startsWith('image/'))) {
+    throw new Error(t.errFileType);
+  }
+
+  if (file.type === 'application/pdf') {
+    return extractPdfContent(file);
+  }
+
+  return requestQwenExtraction(await getImageQwenContent(file));
+}
+
+async function handleUpload(file) {
+  document.getElementById('error-toast').hidden = true;
+  setUploadBusy(true, t.uploadReading);
+
+  try {
+    const { content, language } = await extractFileContent(file);
+    const textEl = document.getElementById('text');
+    selectDetectedLanguage(language);
+    textEl.value = content;
+    updateCharCount();
+    setUploadBusy(false);
+  } catch (err) {
+    setUploadBusy(false);
+    const message = err.message === t.errFileType
+      ? err.message
+      : `${t.errFileRead} ${err.message}`;
+    showError(message);
+  }
 }
 
 // ── Voice fetching ────────────────────────────────────────────────
@@ -361,8 +709,37 @@ async function init() {
   updateSpeedBadge();
 
   const textEl = document.getElementById('text');
-  textEl.addEventListener('input', () => {
-    document.getElementById('char-count').textContent = textEl.value.length;
+  textEl.addEventListener('input', updateCharCount);
+
+  const uploadArea = document.getElementById('upload-area');
+  const fileInput = document.getElementById('file-input');
+  const browseBtn = document.getElementById('upload-browse-btn');
+
+  browseBtn.addEventListener('click', () => fileInput.click());
+
+  fileInput.addEventListener('change', () => {
+    const [file] = fileInput.files;
+    if (file) handleUpload(file);
+    fileInput.value = '';
+  });
+
+  ['dragenter', 'dragover'].forEach(eventName => {
+    uploadArea.addEventListener(eventName, (e) => {
+      e.preventDefault();
+      uploadArea.classList.add('is-dragging');
+    });
+  });
+
+  ['dragleave', 'drop'].forEach(eventName => {
+    uploadArea.addEventListener(eventName, (e) => {
+      e.preventDefault();
+      uploadArea.classList.remove('is-dragging');
+    });
+  });
+
+  uploadArea.addEventListener('drop', (e) => {
+    const [file] = e.dataTransfer.files;
+    if (file) handleUpload(file);
   });
 
   document.getElementById('generate-btn').addEventListener('click', generate);

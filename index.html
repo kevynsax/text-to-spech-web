@@ -44,6 +44,21 @@
           </div>
         </div>
 
+        <div class="upload-area" id="upload-area">
+          <input type="file" id="file-input" accept="image/*,application/pdf" hidden>
+          <div id="upload-idle">
+            <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" width="28" height="28" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <p class="upload-main"><span data-i18n="uploadDrop">Drop a PDF or image, or</span> <button class="upload-browse" id="upload-browse-btn" data-i18n="uploadBrowse">browse</button></p>
+            <p class="upload-sub" data-i18n="uploadFormats">PDF · PNG · JPG · WebP</p>
+          </div>
+          <div id="upload-busy" hidden>
+            <span class="spinner"></span>
+            <p id="upload-status"></p>
+          </div>
+        </div>
+
         <div class="field text-field">
           <label for="text"><span data-i18n="text">Text</span></label>
           <textarea
@@ -111,6 +126,7 @@
     </main>
   </div>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/wavesurfer.js/7.10.3/wavesurfer.min.js"></script>
   <script src="app.js"></script>
 </body>
