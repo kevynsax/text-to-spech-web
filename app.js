@@ -19,6 +19,11 @@ const FILE_CONTENT_PROMPT = [
   'Put only the main readable body content in the JSON content field, in the same language as the file.',
   'Preserve the original reading order: title, headings, paragraphs, lists, and quoted text.',
   'Ignore page numbers, running headers, running footers, footnotes, references, copyright notices, scanner marks, watermarks, and decorative text.',
+  'Ignore superscript footnote markers, whether they are numbers, letters, or symbols placed beside words.',
+  'Do not include footnote text, endnote text, bibliography entries, reference lists, or citation-only notes.',
+  'Join words that were split by line-break hyphenation, for example "trata- dos" must become "tratados".',
+  'Preserve real hyphenated compound words only when the hyphen is part of the original word.',
+  'Preserve visible punctuation such as commas, periods, semicolons, colons, question marks, and exclamation marks because it controls text-to-speech pauses.',
   'Do not describe the page, image quality, layout, fonts, margins, or visual elements.',
   'Do not summarize, correct, modernize, translate, or add any text that is not part of the main content.',
   'If a page has multiple columns, read each column from top to bottom, left to right.',
@@ -413,18 +418,33 @@ function getMostCommonLanguage(languages) {
   return Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'unknown';
 }
 
+function cleanFootnoteMarkers(text) {
+  return text
+    .replace(/[¹²³⁴⁵⁶⁷⁸⁹⁰]+/g, '')
+    .replace(/([.!?,;:])\s*[a-z]\b(?=\s+[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ])/g, '$1')
+    .replace(/(\p{L})\s+([a-z])\b(?=[,.;:!?])/gu, '$1');
+}
+
+function repairLineHyphenation(text) {
+  return text.replace(/(\p{L}{2,})-\s+(\p{Ll}{2,})/gu, '$1$2');
+}
+
 function unwrapPageContent(content) {
   return content
     .replace(/\r\n/g, '\n')
+    .replace(/(\p{L}{2,})-\n\s*(\p{Ll}{2,})/gu, '$1$2')
     .split(/\n{2,}/)
     .map(paragraph => paragraph
       .split('\n')
       .map(line => line.trim())
       .filter(Boolean)
       .join(' ')
+      .replace(/\s+([,.;:!?])/g, '$1')
+      .replace(/([,.;:!?])(?=\S)/g, '$1 ')
       .replace(/\s{2,}/g, ' ')
       .trim())
     .filter(Boolean)
+    .map(paragraph => cleanFootnoteMarkers(repairLineHyphenation(paragraph)))
     .join('\n\n');
 }
 
